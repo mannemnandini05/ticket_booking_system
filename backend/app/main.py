@@ -12,13 +12,24 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .db import engine, get_db
+from .db import engine, get_db, migrate_schema
+from .management import (
+    admin_router,
+    booking_summary,
+    event_management_router,
+    get_managed_event,
+    organizer_router,
+    sync_completed_events,
+)
 from .models import Base, Booking, Event, Notification, Ticket, User
 from .schemas import BookingCreate, BookingDetail, EventCreate, EventResponse, LoginRequest, NotificationBase, RegisterRequest, TicketResponse, TokenResponse, UserProfile
 from .security import create_access_token, get_current_user, hash_password, verify_password
 
 settings = get_settings()
 app = FastAPI(title="SmartEvent API", version="1.0.0")
+app.include_router(event_management_router)
+app.include_router(organizer_router)
+app.include_router(admin_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin, "http://localhost:5174", "http://127.0.0.1:5173", "http://127.0.0.1:5174"],
@@ -45,9 +56,11 @@ def seed_data(db: Session) -> None:
 
 @app.on_event("startup")
 def startup() -> None:
+    migrate_schema()
     Base.metadata.create_all(bind=engine)
     with Session(engine) as db:
         seed_data(db)
+        sync_completed_events(db)
 
 
 @app.get("/api/health")
@@ -60,21 +73,21 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> TokenRe
     existing = db.scalar(select(User).where(User.email == payload.email))
     if existing:
         raise HTTPException(status_code=409, detail="An account with this email already exists")
-    user = User(username=payload.username, email=str(payload.email), hashed_password=hash_password(payload.password))
+    user = User(username=payload.username, email=str(payload.email), hashed_password=hash_password(payload.password), role="USER")
     db.add(user)
     db.commit()
     db.refresh(user)
-    profile = UserProfile(id=user.id, username=user.username, email=user.email, created_at=user.created_at)
-    return TokenResponse(access_token=create_access_token(user.id), user=profile)
+    profile = UserProfile(id=user.id, username=user.username, email=user.email, role=user.role, created_at=user.created_at)
+    return TokenResponse(access_token=create_access_token(user.id, user.role), user=profile)
 
 
-@app.post("/api/auth/login")
+@app.post("/api/auth/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse:
     user = db.scalar(select(User).where(User.email == payload.email))
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    profile = UserProfile(id=user.id, username=user.username, email=user.email, created_at=user.created_at)
-    return TokenResponse(access_token=create_access_token(user.id), user=profile)
+    profile = UserProfile(id=user.id, username=user.username, email=user.email, role=user.role, created_at=user.created_at)
+    return TokenResponse(access_token=create_access_token(user.id, user.role), user=profile)
 
 
 @app.get("/api/auth/me", response_model=UserProfile)
@@ -84,6 +97,7 @@ def me(current_user: Annotated[User, Depends(get_current_user)], db: Session = D
 
 @app.get("/api/events", response_model=list[EventResponse])
 def list_events(db: Session = Depends(get_db), search: str = "", category: str = "") -> list[Event]:
+    sync_completed_events(db)
     query = select(Event).order_by(Event.event_date)
     if search:
         query = query.where(Event.title.ilike(f"%{search}%"))
@@ -94,6 +108,7 @@ def list_events(db: Session = Depends(get_db), search: str = "", category: str =
 
 @app.get("/api/events/{event_id}", response_model=EventResponse)
 def get_event(event_id: int, db: Session = Depends(get_db)) -> Event:
+    sync_completed_events(db)
     event = db.get(Event, event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -102,9 +117,12 @@ def get_event(event_id: int, db: Session = Depends(get_db)) -> Event:
 
 @app.get("/api/events/{event_id}/availability")
 def event_availability(event_id: int, db: Session = Depends(get_db)) -> dict:
+    sync_completed_events(db)
     event = db.get(Event, event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
+    if event.event_status != "ACTIVE":
+        raise HTTPException(status_code=409, detail="This event is no longer available for booking")
     reserved = db.scalar(select(func.coalesce(func.sum(Booking.ticket_quantity), 0)).where(Booking.event_id == event_id, Booking.booking_status == "CONFIRMED")) or 0
     return {"available_tickets": max(event.ticket_capacity - reserved, 0), "total_tickets": event.ticket_capacity}
 
@@ -120,9 +138,12 @@ def qr_image(data: str) -> str:
 
 @app.post("/api/bookings", response_model=BookingDetail, status_code=status.HTTP_201_CREATED)
 def create_booking(payload: BookingCreate, current_user: Annotated[User, Depends(get_current_user)], db: Session = Depends(get_db)) -> Booking:
+    sync_completed_events(db)
     event = db.get(Event, payload.event_id)
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
+    if event.event_status != "ACTIVE":
+        raise HTTPException(status_code=409, detail="This event is no longer available for booking")
     event_date = event.event_date.replace(tzinfo=timezone.utc) if event.event_date.tzinfo is None else event.event_date
     if event_date <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="This event has already started")
@@ -179,9 +200,14 @@ def mark_notification_read(notification_id: int, current_user: Annotated[User, D
 
 
 @app.get("/api/events/{event_id}/bookings")
-def booking_count(event_id: int, db: Session = Depends(get_db)) -> dict:
-    count = db.scalar(select(func.coalesce(func.sum(Booking.ticket_quantity), 0)).where(Booking.event_id == event_id, Booking.booking_status == "CONFIRMED")) or 0
-    return {"booked_tickets": count}
+def booking_count(
+    event_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> dict:
+    event = get_managed_event(event_id, current_user, db)
+    sold, booking_count, _ = booking_summary(db, event.id)
+    return {"booked_tickets": sold, "booking_count": booking_count}
 
 
 @app.get("/api/category-options")

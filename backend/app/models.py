@@ -15,9 +15,11 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
     email: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="USER", server_default="USER")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     bookings: Mapped[list["Booking"]] = relationship(back_populates="user")
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user")
+    organized_events: Mapped[list["Event"]] = relationship(back_populates="organizer")
 
 
 class Event(Base):
@@ -28,11 +30,28 @@ class Event(Base):
     category: Mapped[str] = mapped_column(String(40), nullable=False)
     location: Mapped[str] = mapped_column(String(160), nullable=False)
     event_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    organizer_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    event_status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE", server_default="ACTIVE")
     ticket_price: Mapped[float] = mapped_column(Float, nullable=False)
     ticket_capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     banner_image: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     bookings: Mapped[list["Booking"]] = relationship(back_populates="event")
+    organizer: Mapped[Optional[User]] = relationship(back_populates="organized_events")
+
+    @property
+    def lifecycle_status(self) -> str:
+        if self.event_status == "CANCELLED":
+            return "CANCELLED"
+        if self.event_status == "COMPLETED":
+            return "COMPLETED"
+        event_date = self.event_date
+        if event_date.tzinfo is None:
+            event_date = event_date.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if event_date.date() < now.date():
+            return "COMPLETED"
+        return "ONGOING" if event_date <= now else "UPCOMING"
 
 
 class Booking(Base):
