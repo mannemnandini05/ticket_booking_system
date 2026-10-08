@@ -1,0 +1,5 @@
+.auth-nav-actions{display:flex;align-items:center;gap:8px}
+.notification-error{padding:10px;color:#a8283a;font-size:12px;line-height:1.5}
+.notification-error button{margin-left:8px;border:0;background:transparent;color:var(--purple);font-weight:700}
+.session-error{padding:10px 20px;background:#fff4dc;color:#875b00;text-align:center;font-size:13px}
+@media(max-width:520px){.auth-nav-actions .secondary-button{display:none}.notification-dropdown{position:fixed;top:82px;right:12px;width:min(330px,calc(100vw - 24px))}}

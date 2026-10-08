@@ -23,7 +23,12 @@ api.interceptors.response.use(
         }).join("; ")
       : typeof detail === "string"
         ? detail
-        : error.message || "Something went wrong";
+          : !error.response && error.code === "ERR_NETWORK"
+            ? `Unable to reach the API at ${error.config?.baseURL || "the configured server"}. Make sure the backend is running and try again.`
+            : error.message || "Something went wrong";
+    if (error.response?.status === 401 && localStorage.getItem("smartevent_token")) {
+        window.dispatchEvent(new Event("smartevent:unauthorized"));
+    }
     return Promise.reject(new Error(message));
   },
 );
