@@ -55,6 +55,8 @@ class EventResponse(BaseModel):
     ticket_price: float
     ticket_capacity: int
     banner_image: str | None
+    average_rating: float | None = None
+    review_count: int = 0
     created_at: datetime
 
 
@@ -100,6 +102,9 @@ class BookingBase(BaseModel):
     ticket_quantity: int
     total_price: float
     booking_status: str
+    coupon_id: int | None
+    discount_amount: float
+    final_amount: float
     created_at: datetime
 
 
@@ -137,8 +142,86 @@ class NotificationBase(BaseModel):
     title: str
     message: str
     type: str
+    notification_type: str
     is_read: bool
     created_at: datetime
+
+
+class CouponValidate(BaseModel):
+    coupon_code: str = Field(min_length=1, max_length=40)
+    booking_amount: float = Field(gt=0)
+
+
+class CouponApply(BaseModel):
+    coupon_code: str = Field(min_length=1, max_length=40)
+
+
+class CouponCreate(BaseModel):
+    coupon_code: str = Field(min_length=3, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
+    discount_type: Literal["PERCENTAGE", "FIXED"]
+    discount_value: float = Field(gt=0)
+    minimum_booking_amount: float = Field(ge=0, default=0)
+    expiry_date: datetime
+    usage_limit: int | None = Field(default=None, gt=0)
+    is_active: bool = True
+
+
+class CouponResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    coupon_code: str
+    discount_type: str
+    discount_value: float
+    minimum_booking_amount: float
+    expiry_date: datetime
+    usage_limit: int | None
+    is_active: bool
+
+
+class CouponValidationResponse(BaseModel):
+    coupon: CouponResponse
+    discount_amount: float
+    final_amount: float
+
+
+class PaymentCreate(BaseModel):
+    booking_id: int
+    payment_method: Literal["CARD", "UPI", "NET_BANKING"]
+    simulate_failure: bool = False
+
+
+class PaymentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    booking_id: int
+    payment_method: str
+    payment_status: Literal["PENDING", "SUCCESS", "FAILED"]
+    transaction_id: str | None
+    amount: float
+    created_at: datetime
+
+
+class ReviewCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    review_text: str = Field(min_length=1, max_length=2000)
+
+
+class ReviewResponse(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    event_id: int
+    rating: int
+    review_text: str
+    created_at: datetime
+
+
+class EventReviewsResponse(BaseModel):
+    average_rating: float | None
+    review_count: int
+    reviews: list[ReviewResponse]
 
 
 class TokenResponse(BaseModel):
@@ -178,3 +261,58 @@ class AdminAnalytics(BaseModel):
     monthly_booking_trends: list[dict]
     popular_events: list[dict]
     top_revenue_events: list[dict]
+
+
+class SearchFiltersRequest(BaseModel):
+    search: str = ""
+    category: str | None = None
+    location: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    sort: Literal["date", "price", "popularity", "rating"] = "date"
+    price_min: float | None = Field(default=None, ge=0)
+    price_max: float | None = Field(default=None, ge=0)
+
+
+class EventCardResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    category: str
+    location: str
+    event_date: datetime
+    ticket_price: float
+    banner_image: str | None
+    average_rating: float | None
+    review_count: int
+    lifecycle_status: str
+
+
+class FeaturedEventsResponse(BaseModel):
+    featured: list[EventCardResponse]
+    trending: list[EventCardResponse]
+    upcoming: list[EventCardResponse]
+
+
+class PaymentMethodResponse(BaseModel):
+    method: str
+    display_name: str
+    icon: str | None
+    enabled: bool
+
+
+class NotificationStats(BaseModel):
+    unread_count: int
+    total_count: int
+
+
+class UserPreferences(BaseModel):
+    notification_preferences: dict = {
+        "booking_confirmations": True,
+        "payment_updates": True,
+        "event_reminders": True,
+        "promotional": False,
+    }
+    theme_preference: Literal["light", "dark", "auto"] = "auto"
+    email_notifications: bool = True

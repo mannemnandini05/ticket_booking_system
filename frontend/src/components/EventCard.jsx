@@ -15,6 +15,7 @@ export default function EventCard({ event, onBook }) {
         <p>{event.description}</p>
         <div className="event-footer">
           <div><small>From</small><strong>₹{event.ticket_price.toLocaleString("en-IN")}</strong></div>
+          {event.average_rating !== null && <div className="card-rating"><small>Rating</small><strong>★ {event.average_rating} <small>({event.review_count})</small></strong></div>}
           <button className="primary-button small" disabled={event.event_status !== "ACTIVE" || event.lifecycle_status !== "UPCOMING"} onClick={() => onBook(event)}>
             {event.event_status === "CANCELLED" ? "Cancelled" : event.event_status === "COMPLETED" ? "Completed" : "Book tickets"}
           </button>

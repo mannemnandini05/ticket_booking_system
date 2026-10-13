@@ -1,16 +1,26 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api";
+import { useAuth } from "../context/AuthContext";
 
 export default function EventDetails() {
   const { id } = useParams();
+  const { user } = useAuth();
   const [event, setEvent] = useState(null);
+  const [reviews, setReviews] = useState({ reviews: [], average_rating: null, review_count: 0 });
+  const [hasAttended, setHasAttended] = useState(false);
+  const [rating, setRating] = useState(5);
+  const [reviewText, setReviewText] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [availability, setAvailability] = useState(0);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [reviewError, setReviewError] = useState("");
+  const [reviewMessage, setReviewMessage] = useState("");
   const navigate = useNavigate();
+  const ownReview = reviews.reviews.find((review) => review.user_id === user?.id);
+  const canReview = hasAttended && event && new Date(event.event_date).getTime() <= Date.now();
 
   useEffect(() => {
     let active = true;
@@ -22,28 +32,74 @@ export default function EventDetails() {
         setEvent(eventResponse.data);
         if (eventResponse.data.event_status !== "ACTIVE" || eventResponse.data.lifecycle_status !== "UPCOMING") {
           setAvailability(0);
-          return;
+        } else {
+          const availabilityResponse = await api.get(`/events/${id}/availability`);
+          if (active) setAvailability(availabilityResponse.data.available_tickets);
         }
-        const availabilityResponse = await api.get(`/events/${id}/availability`);
-        if (active) setAvailability(availabilityResponse.data.available_tickets);
       })
       .catch((reason) => active && setError(reason.message))
       .finally(() => active && setLoading(false));
+    api.get(`/events/${id}/reviews`)
+      .then((response) => active && setReviews(response.data))
+      .catch((reason) => active && setReviewError(reason.message));
+    if (user) {
+      api.get("/bookings")
+        .then((response) => active && setHasAttended(response.data.some((booking) => booking.event_id === Number(id) && booking.booking_status === "CONFIRMED")))
+        .catch((reason) => active && setReviewError(reason.message));
+    }
     return () => { active = false; };
-  }, [id]);
+  }, [id, user]);
 
   const submit = async () => {
     setSubmitting(true);
     setError("");
     try {
       const response = await api.post("/bookings", { event_id: event.id, ticket_quantity: quantity });
-      navigate("/booking-confirmation", { state: { booking: response.data } });
+      navigate(`/payment/${response.data.id}`, { state: { booking: response.data } });
     } catch (reason) {
       setError(reason.message);
     } finally {
       setSubmitting(false);
     }
   };
+
+  const submitReview = async (submitEvent) => {
+    submitEvent.preventDefault();
+    setReviewError("");
+    setReviewMessage("");
+    try {
+      if (ownReview) {
+        await api.put(`/reviews/${ownReview.id}`, { rating, review_text: reviewText });
+      } else {
+        await api.post(`/events/${id}/reviews`, { rating, review_text: reviewText });
+      }
+      const response = await api.get(`/events/${id}/reviews`);
+      setReviews(response.data);
+      setReviewMessage("Your review has been saved.");
+    } catch (reason) {
+      setReviewError(reason.message);
+    }
+  };
+
+  const deleteReview = async () => {
+    setReviewError("");
+    try {
+      await api.delete(`/reviews/${ownReview.id}`);
+      setReviews((current) => ({ ...current, reviews: current.reviews.filter((review) => review.id !== ownReview.id), review_count: Math.max(0, current.review_count - 1) }));
+      setRating(5);
+      setReviewText("");
+      setReviewMessage("Your review has been deleted.");
+    } catch (reason) {
+      setReviewError(reason.message);
+    }
+  };
+
+  useEffect(() => {
+    if (ownReview) {
+      setRating(ownReview.rating);
+      setReviewText(ownReview.review_text);
+    }
+  }, [ownReview?.id, ownReview?.rating, ownReview?.review_text]);
 
   if (loading) return <div className="page-loader">Checking availability...</div>;
   if (!event) return <main className="page-shell"><div className="error-state">{error || "Event not found."}</div><button className="secondary-button" onClick={() => navigate("/")}>Back to events</button></main>;
@@ -59,19 +115,39 @@ export default function EventDetails() {
           {(event.event_status !== "ACTIVE" || event.lifecycle_status !== "UPCOMING") && <div className="error-state">This event is {event.lifecycle_status.toLowerCase()} and is not accepting bookings.</div>}
           <div className="booking-card">
             <label>Number of tickets</label>
-            <div className="quantity-control">
+            {user && <div className="quantity-control">
               <button aria-label="Remove one ticket" disabled={quantity <= 1 || submitting} onClick={() => setQuantity((value) => Math.max(1, value - 1))}>−</button>
               <strong>{quantity}</strong>
               <button aria-label="Add one ticket" disabled={quantity >= availability || submitting} onClick={() => setQuantity((value) => Math.min(availability, value + 1))}>+</button>
-            </div>
+            </div>}
             <div className="availability"><span className="status-dot" /> {availability} tickets available</div>
-            <div className="price-row"><span>Total</span><strong>₹{(event.ticket_price * quantity).toLocaleString("en-IN")}</strong></div>
+            {user && <div className="price-row"><span>Total</span><strong>₹{(event.ticket_price * quantity).toLocaleString("en-IN")}</strong></div>}
             {error && <div className="error-state">{error}</div>}
-            <button className="primary-button wide" onClick={submit} disabled={!availability || event.event_status !== "ACTIVE" || event.lifecycle_status !== "UPCOMING" || submitting}>{submitting ? "Confirming booking..." : "Confirm booking"}</button>
+            <button className="primary-button wide" onClick={() => user ? submit() : navigate("/login")} disabled={!availability || event.event_status !== "ACTIVE" || event.lifecycle_status !== "UPCOMING" || submitting}>{user ? (submitting ? "Creating booking..." : "Continue to checkout") : "Sign in to book"}</button>
           </div>
         </div>
         <div className="booking-image"><img src={event.banner_image} alt={event.title} /><div><span>{event.category}</span><h2>{event.title}</h2><p>{event.location}</p></div></div>
       </div>
+      <section className="event-reviews">
+        <div className="reviews-heading"><div><span className="eyebrow">Attendee feedback</span><h2>Reviews {reviews.average_rating !== null && <span>★ {reviews.average_rating}</span>}</h2></div><small>{reviews.review_count} review{reviews.review_count === 1 ? "" : "s"}</small></div>
+        {reviewError && <div className="error-state">{reviewError}</div>}
+        {canReview && <form className="review-form" onSubmit={submitReview}>
+          <label>Your rating</label>
+          <div className="star-picker" role="radiogroup" aria-label="Rating from 1 to 5">
+            {[1, 2, 3, 4, 5].map((value) => <button type="button" role="radio" aria-checked={rating === value} aria-label={`${value} star${value === 1 ? "" : "s"}`} className={value <= rating ? "selected" : ""} key={value} onClick={() => setRating(value)}>★</button>)}
+          </div>
+          <label htmlFor="review-text">Share your experience</label>
+          <textarea id="review-text" value={reviewText} onChange={(input) => setReviewText(input.target.value)} minLength={1} maxLength={2000} required rows={4} />
+          {reviewMessage && <p className="success-message">{reviewMessage}</p>}
+          <div className="review-actions"><button className="primary-button small">{ownReview ? "Update review" : "Submit review"}</button>{ownReview && <button type="button" className="secondary-button small" onClick={deleteReview}>Delete review</button>}</div>
+        </form>}
+        <div className="review-list">
+          {reviews.reviews.length ? reviews.reviews.map((review) => <article className="review-item" key={review.id}>
+            <div><strong>{review.username}</strong><span className="review-stars" aria-label={`${review.rating} out of 5 stars`}>{"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)}</span></div>
+            <p>{review.review_text}</p><small>{new Date(review.created_at).toLocaleDateString("en-IN")}</small>
+          </article>) : <p className="empty-copy">No attendee reviews yet.</p>}
+        </div>
+      </section>
     </main>
   );
 }

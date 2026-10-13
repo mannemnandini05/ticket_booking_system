@@ -23,8 +23,9 @@ export default function BookingHistory() {
         : error ? <div className="error-state">{error}</div>
           : bookings.length ? <div className="booking-history">{bookings.map((booking) => <article className="history-card" key={booking.id}>
             <div className="history-image"><img src={booking.event.banner_image} alt={booking.event.title} /></div>
-            <div><span className={`status ${booking.booking_status.toLowerCase()}`}>{booking.booking_status}</span><h3>{booking.event.title}</h3><p>{booking.event.location} · {booking.ticket_quantity} ticket(s)</p><strong>₹{booking.total_price.toLocaleString("en-IN")}</strong></div>
+            <div><span className={`status ${booking.booking_status.toLowerCase()}`}>{booking.booking_status.replaceAll("_", " ")}</span><h3>{booking.event.title}</h3><p>{booking.event.location} · {booking.ticket_quantity} ticket(s)</p><strong>₹{Number(booking.final_amount).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong></div>
             {booking.ticket && <button className="secondary-button" onClick={() => navigate(`/tickets/${booking.ticket.id}`)}>View ticket</button>}
+            {["PENDING_PAYMENT", "PAYMENT_FAILED"].includes(booking.booking_status) && <button className="primary-button small" onClick={() => navigate(`/payment/${booking.id}`)}>{booking.booking_status === "PENDING_PAYMENT" ? "Complete payment" : "Retry payment"}</button>}
           </article>)}</div>
             : <div className="empty-state"><Ticket size={34} /><h3>No bookings yet</h3><p>Your confirmed events will appear here.</p></div>}
     </main>

@@ -11,6 +11,10 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
+  const [location, setLocation] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [sort, setSort] = useState("date");
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const navigate = useNavigate();
@@ -19,19 +23,19 @@ export default function Home() {
     let active = true;
     setLoading(true);
     setError("");
-    api.get("/events", { params: { search, category } })
+    api.get("/events", { params: { search, category, location, date_from: dateFrom || undefined, date_to: dateTo || undefined, sort } })
       .then((response) => active && setEvents(response.data))
       .catch((reason) => active && setError(reason.message))
       .finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [search, category, reloadKey]);
+  }, [search, category, location, dateFrom, dateTo, sort, reloadKey]);
 
   const content = loading
     ? <div className="page-loader">Finding events...</div>
     : error
       ? <div className="error-state">{error}<button className="secondary-button small" onClick={() => setReloadKey((value) => value + 1)}>Retry</button></div>
       : events.length
-        ? <div className="event-grid">{events.map((event) => <EventCard key={event.id} event={event} onBook={(item) => navigate(`/events/${item.id}/book`, { state: { event: item } })} />)}</div>
+        ? <div className="event-grid">{events.map((event) => <EventCard key={event.id} event={event} onBook={(item) => navigate(`/events/${item.id}`)} />)}</div>
         : <div className="empty-state"><Search size={34} /><h3>No events found</h3><p>Try another search or category.</p></div>;
 
   return (
@@ -54,6 +58,13 @@ export default function Home() {
         <div className="section-heading">
           <div><span className="eyebrow">Explore events</span><h2>Find your next favorite</h2></div>
           <div className="filter-row">{["", "Music", "Tech", "Sports", "Business"].map((item) => <button key={item || "all"} className={category === item ? "filter active" : "filter"} onClick={() => setCategory(item)}>{item || "All"}</button>)}</div>
+        </div>
+        <div className="discovery-filters" aria-label="Event filters">
+          <label>Location<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="City or venue" /></label>
+          <label>From<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
+          <label>To<input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} /></label>
+          <label>Sort by<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="date">Date</option><option value="popularity">Popularity</option><option value="price">Price</option></select></label>
+          {(location || dateFrom || dateTo || sort !== "date") && <button className="filter-clear" onClick={() => { setLocation(""); setDateFrom(""); setDateTo(""); setSort("date"); }}>Clear filters</button>}
         </div>
         {content}
       </section>

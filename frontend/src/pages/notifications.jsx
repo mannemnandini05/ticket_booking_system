@@ -25,13 +25,23 @@ export default function Notifications() {
     }
   };
 
+  const markAllRead = async () => {
+    setError("");
+    try {
+      await api.patch("/notifications/read-all");
+      setNotifications((items) => items.map((item) => ({ ...item, is_read: true })));
+    } catch (reason) {
+      setError(reason.message);
+    }
+  };
+
   return (
     <main className="page-shell">
-      <div className="page-title"><div><span className="eyebrow">Stay in the loop</span><h1>Notifications</h1></div></div>
+      <div className="page-title"><div><span className="eyebrow">Stay in the loop</span><h1>Notifications</h1></div>{notifications.some((item) => !item.is_read) && <button className="secondary-button" onClick={markAllRead}>Mark all as read</button>}</div>
       {error && <div className="error-state">{error}</div>}
       {loading ? <div className="page-loader">Loading notifications...</div>
         : notifications.length ? <div className="notification-page-list">{notifications.map((item) => <article className={`notification-page-item ${item.is_read ? "read" : ""}`} key={item.id}>
-          <span className="notification-icon">{item.type === "BOOKING" ? "✓" : "•"}</span>
+          <span className="notification-icon">{(item.notification_type || item.type) === "BOOKING" ? "✓" : (item.notification_type || item.type) === "PAYMENT" ? "₹" : "•"}</span>
           <div><div><h3>{item.title}</h3><span>{new Date(item.created_at).toLocaleDateString("en-IN")}</span></div><p>{item.message}</p></div>
           {!item.is_read && <button className="secondary-button small" onClick={() => markRead(item.id)}>Mark read</button>}
         </article>)}</div>

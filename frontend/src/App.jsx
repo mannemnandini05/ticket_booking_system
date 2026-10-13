@@ -8,6 +8,8 @@ import EventDetails from "./pages/eventDetails";
 import Home from "./pages/home";
 import Login from "./pages/login";
 import Notifications from "./pages/notifications";
+import PaymentCheckout from "./pages/paymentCheckout";
+import PaymentConfirmation from "./pages/paymentConfirmation";
 import Profile from "./pages/Profile";
 import Register from "./pages/register";
 import Tickets from "./pages/tickets";
@@ -21,6 +23,7 @@ import {
   OrganizerEventForm,
   OrganizerEvents,
 } from "./pages/management";
+import "./feature-pages.css";
 
 function AppRoutes() {
   const { user, authError } = useAuth();
@@ -35,6 +38,9 @@ function AppRoutes() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/events/:id/book" element={<ProtectedRoute><EventDetails /></ProtectedRoute>} />
+        <Route path="/events/:id" element={<EventDetails />} />
+        <Route path="/payment/:bookingId" element={<ProtectedRoute><PaymentCheckout /></ProtectedRoute>} />
+        <Route path="/payment-confirmation" element={<ProtectedRoute><PaymentConfirmation /></ProtectedRoute>} />
         <Route path="/booking-confirmation" element={<ProtectedRoute><BookingConfirmationPage /></ProtectedRoute>} />
         <Route path="/bookings" element={<ProtectedRoute><BookingHistory /></ProtectedRoute>} />
         <Route path="/tickets" element={<ProtectedRoute><Tickets /></ProtectedRoute>} />

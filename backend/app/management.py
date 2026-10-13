@@ -39,7 +39,7 @@ def booking_summary(db: Session, event_id: int) -> tuple[int, int, float]:
         select(
             func.coalesce(func.sum(Booking.ticket_quantity), 0),
             func.count(Booking.id),
-            func.coalesce(func.sum(Booking.total_price), 0),
+            func.coalesce(func.sum(Booking.final_amount), 0),
         ).where(Booking.event_id == event_id, Booking.booking_status == "CONFIRMED")
     ).one()
     return int(sold), int(bookings), float(revenue)
@@ -334,7 +334,7 @@ def admin_analytics(
     )
     bookings = list(db.scalars(booking_filter).all())
     total_sold = sum(booking.ticket_quantity for booking in bookings)
-    total_revenue = sum(booking.total_price for booking in bookings)
+    total_revenue = sum(booking.final_amount for booking in bookings)
 
     daily = db.execute(
         apply_date_window(
@@ -366,7 +366,7 @@ def admin_analytics(
                 Event.id,
                 Event.title,
                 func.coalesce(func.sum(Booking.ticket_quantity), 0),
-                func.coalesce(func.sum(Booking.total_price), 0),
+                func.coalesce(func.sum(Booking.final_amount), 0),
             )
             .outerjoin(
                 Booking,

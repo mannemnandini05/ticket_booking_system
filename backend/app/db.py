@@ -27,6 +27,21 @@ def migrate_schema(target_engine=engine) -> None:
                 connection.execute(text("ALTER TABLE events ADD COLUMN organizer_id INTEGER REFERENCES users(id)"))
             if "event_status" not in columns:
                 connection.execute(text("ALTER TABLE events ADD COLUMN event_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'"))
+    if "bookings" in tables:
+        columns = {column["name"] for column in inspector.get_columns("bookings")}
+        with target_engine.begin() as connection:
+            if "coupon_id" not in columns:
+                connection.execute(text("ALTER TABLE bookings ADD COLUMN coupon_id INTEGER REFERENCES coupons(id)"))
+            if "discount_amount" not in columns:
+                connection.execute(text("ALTER TABLE bookings ADD COLUMN discount_amount FLOAT NOT NULL DEFAULT 0"))
+            if "final_amount" not in columns:
+                connection.execute(text("ALTER TABLE bookings ADD COLUMN final_amount FLOAT NOT NULL DEFAULT 0"))
+                connection.execute(text("UPDATE bookings SET final_amount = total_price"))
+    if "notifications" in tables:
+        columns = {column["name"] for column in inspector.get_columns("notifications")}
+        if "type" in columns and "notification_type" not in columns:
+            with target_engine.begin() as connection:
+                connection.execute(text("ALTER TABLE notifications RENAME COLUMN type TO notification_type"))
 
 
 def get_db():

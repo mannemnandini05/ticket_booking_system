@@ -4,11 +4,12 @@ SmartEvent is a full-stack event discovery and ticket booking application. Brows
 
 ## Features
 
-- Search events and filter by category
+- Search events and filter by category, location, and date range; sort by date, price, or popularity
 - Register and sign in with role-based access
-- Check ticket availability and book tickets
+- Check ticket availability, apply discounts, and complete simulated payments
 - View booking history and download QR-code tickets
-- View booking notifications
+- Receive booking, payment, event reminder, and event update notifications
+- Review attended events and see average attendee ratings
 - Create and manage events as an organizer
 - Monitor organizer ticket sales, bookings, and revenue
 - Review platform analytics and manage user roles as an administrator
@@ -56,7 +57,7 @@ npm run dev
 
 Open the local URL printed by Vite (by default, `http://localhost:5173`).
 
-The frontend uses `http://127.0.0.1:8000/api` by default. To use a different API base URL, create `frontend/.env` and set:
+During local development, Vite proxies `/api` requests to the backend at `http://127.0.0.1:8000`, avoiding browser CORS and loopback-host mismatches. To use a separately hosted API, create `frontend/.env` and set:
 
 ```dotenv
 VITE_API_URL=http://127.0.0.1:8000/api
@@ -93,6 +94,16 @@ All endpoints are under `/api`. Protected endpoints require the bearer token ret
 Admin analytics accepts optional `date_from` and `date_to` query parameters in `YYYY-MM-DD` format. Organizer ownership is checked on every event-management request. Event status is persisted as `ACTIVE`, `CANCELLED`, or `COMPLETED`; the API derives `UPCOMING` or `ONGOING` from the event date and transitions active events to completed after their event date.
 
 The backend migrates existing SQLite databases on startup, assigning existing accounts the `USER` role and existing events the `ACTIVE` status. It adds nullable organizer ownership for Phase 1 events, which remain manageable only by administrators.
+
+## Payments, coupons, reviews, and discovery
+
+Ticket bookings reserve inventory for 15 minutes while payment is pending. The backend uses a simulated payment processor by default; it does not collect or store card credentials. A successful payment confirms the booking and creates the QR ticket, while a declined test payment can be retried from **My bookings**. The checkout UI exposes a failure simulation control only in Vite development mode, and the API refuses simulated failures in production.
+
+Administrators can create promotional codes using `POST /api/admin/coupons`. Authenticated users validate a code with `POST /api/coupons/validate` and apply it to a pending booking with `POST /api/bookings/{booking_id}/coupon`. Discounts and final amounts are computed server-side; coupon usage is consumed only after successful payment.
+
+Event feedback is available from an event page after the event date for users with a confirmed booking. Attendees can create, edit, or delete their own review; `GET /api/events/{event_id}/reviews` returns reviews and the average rating. Event discovery accepts `search`, `category`, `location`, `date_from`, `date_to`, and `sort` (`date`, `popularity`, or `price`) query parameters.
+
+Notification reminders are generated when a user loads notifications if they have a confirmed booking for an event starting within the next 24 hours. Booking confirmations, payment outcomes, event changes, and cancellations create notification records. Notifications can be marked individually or all at once.
 
 ## Run tests
 

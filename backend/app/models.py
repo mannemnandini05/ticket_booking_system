@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Text, String, Float
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Text, String, Float, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, synonym
 
 
 class Base(DeclarativeBase):
@@ -20,6 +20,7 @@ class User(Base):
     bookings: Mapped[list["Booking"]] = relationship(back_populates="user")
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user")
     organized_events: Mapped[list["Event"]] = relationship(back_populates="organizer")
+    reviews: Mapped[list["Review"]] = relationship(back_populates="user")
 
 
 class Event(Base):
@@ -38,6 +39,15 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     bookings: Mapped[list["Booking"]] = relationship(back_populates="event")
     organizer: Mapped[Optional[User]] = relationship(back_populates="organized_events")
+    reviews: Mapped[list["Review"]] = relationship(back_populates="event")
+
+    @property
+    def average_rating(self) -> Optional[float]:
+        return round(sum(review.rating for review in self.reviews) / len(self.reviews), 1) if self.reviews else None
+
+    @property
+    def review_count(self) -> int:
+        return len(self.reviews)
 
     @property
     def lifecycle_status(self) -> str:
@@ -61,11 +71,16 @@ class Booking(Base):
     event_id: Mapped[int] = mapped_column(Integer, ForeignKey("events.id"), nullable=False, index=True)
     ticket_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     total_price: Mapped[float] = mapped_column(Float, nullable=False)
-    booking_status: Mapped[str] = mapped_column(String(20), nullable=False, default="CONFIRMED")
+    booking_status: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING_PAYMENT")
+    coupon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("coupons.id"), nullable=True)
+    discount_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    final_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     user: Mapped[User] = relationship(back_populates="bookings")
     event: Mapped[Event] = relationship(back_populates="bookings")
     ticket: Mapped[Optional["Ticket"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+    coupon: Mapped[Optional["Coupon"]] = relationship(back_populates="bookings")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
 
 
 class Ticket(Base):
@@ -84,7 +99,51 @@ class Notification(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    type: Mapped[str] = mapped_column(String(20), nullable=False, default="SYSTEM")
+    notification_type: Mapped[str] = mapped_column(String(20), nullable=False, default="SYSTEM")
+    type = synonym("notification_type")
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     user: Mapped[User] = relationship(back_populates="notifications")
+
+
+class Coupon(Base):
+    __tablename__ = "coupons"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    coupon_code: Mapped[str] = mapped_column(String(40), unique=True, index=True, nullable=False)
+    discount_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    discount_value: Mapped[float] = mapped_column(Float, nullable=False)
+    minimum_booking_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    expiry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    usage_limit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    redeemed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    bookings: Mapped[list[Booking]] = relationship(back_populates="coupon")
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    booking_id: Mapped[int] = mapped_column(ForeignKey("bookings.id"), nullable=False, index=True)
+    payment_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    payment_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    transaction_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, unique=True)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    booking: Mapped[Booking] = relationship(back_populates="payments")
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+    __table_args__ = (
+        CheckConstraint("rating >= 1 AND rating <= 5", name="ck_reviews_rating_range"),
+        UniqueConstraint("user_id", "event_id", name="uq_reviews_user_event"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    review_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    user: Mapped[User] = relationship(back_populates="reviews")
+    event: Mapped[Event] = relationship(back_populates="reviews")
