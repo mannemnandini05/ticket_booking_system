@@ -1,5 +1,8 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import jwt
 from fastapi.testclient import TestClient
@@ -363,12 +366,17 @@ class PhaseTwoApiTests(unittest.TestCase):
         with legacy_engine.begin() as connection:
             connection.execute(text("CREATE TABLE users (id INTEGER PRIMARY KEY)"))
             connection.execute(text("CREATE TABLE events (id INTEGER PRIMARY KEY)"))
+            connection.execute(text("CREATE TABLE event_updates (id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, message TEXT NOT NULL, created_at DATETIME NOT NULL)"))
             connection.execute(text("CREATE TABLE notifications (id INTEGER PRIMARY KEY, type VARCHAR(20) NOT NULL)"))
         migrate_schema(legacy_engine)
         self.assertIn("role", {column["name"] for column in inspect(legacy_engine).get_columns("users")})
+        self.assertIn("profile_picture_url", {column["name"] for column in inspect(legacy_engine).get_columns("users")})
         event_columns = {column["name"] for column in inspect(legacy_engine).get_columns("events")}
         self.assertIn("organizer_id", event_columns)
         self.assertIn("event_status", event_columns)
+        self.assertIn("reserved_tickets", event_columns)
+        update_columns = {column["name"] for column in inspect(legacy_engine).get_columns("event_updates")}
+        self.assertIn("important", update_columns)
         notification_columns = {column["name"] for column in inspect(legacy_engine).get_columns("notifications")}
         self.assertIn("notification_type", notification_columns)
         legacy_engine.dispose()
@@ -399,6 +407,188 @@ class PhaseTwoApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["event_status"], "COMPLETED")
         self.assertEqual(response.json()["lifecycle_status"], "COMPLETED")
+
+    def test_phase_four_profile_wishlist_activity_and_chat(self):
+        user_headers = self.headers("USER")
+        self.assertEqual(
+            self.client.post(
+                f"/api/v2/events/{self.event_id}/views", headers=user_headers
+            ).status_code,
+            204,
+        )
+        profile_update = self.client.put(
+            "/api/v2/profile",
+            json={"username": "updated_user", "profile_picture_url": "https://example.com/avatar.png"},
+            headers=user_headers,
+        )
+        self.assertEqual(profile_update.status_code, 200, profile_update.text)
+        self.assertEqual(profile_update.json()["username"], "updated_user")
+        self.assertEqual(profile_update.json()["profile_picture_url"], "https://example.com/avatar.png")
+        activity = self.client.get("/api/v2/profile/activity", headers=user_headers)
+        self.assertEqual(activity.status_code, 200, activity.text)
+        self.assertEqual(activity.json()["events_viewed"], 1)
+        recommended_event = Event(
+            title="Recommended technology event",
+            description="A sufficiently long technology event description.",
+            category="Tech",
+            location="Test venue",
+            event_date=datetime.now(timezone.utc) + timedelta(days=15),
+            ticket_price=30,
+            ticket_capacity=10,
+            event_status="ACTIVE",
+        )
+        with Session(self.engine) as db:
+            db.add(recommended_event)
+            db.commit()
+            recommended_event_id = recommended_event.id
+        recommendations = self.client.get("/api/v2/recommendations", headers=user_headers)
+        self.assertEqual(recommendations.status_code, 200, recommendations.text)
+        self.assertEqual(recommendations.json()[0]["id"], recommended_event_id)
+
+        saved = self.client.post(
+            f"/api/v2/wishlist/{self.event_id}", headers=user_headers
+        )
+        self.assertEqual(saved.status_code, 201, saved.text)
+        wishlist = self.client.get("/api/v2/wishlist", headers=user_headers)
+        self.assertEqual(wishlist.status_code, 200, wishlist.text)
+        self.assertEqual(wishlist.json()[0]["event"]["id"], self.event_id)
+        self.assertEqual(
+            self.client.delete(
+                f"/api/v2/wishlist/{self.event_id}", headers=user_headers
+            ).status_code,
+            204,
+        )
+
+        chat = self.client.post(
+            "/api/v2/chat", json={"message": "Help with ticket issues"}
+        )
+        self.assertEqual(chat.status_code, 200, chat.text)
+        self.assertIn("My bookings", chat.json()["reply"])
+        private_chat = self.client.post(
+            "/api/v2/chat", json={"message": "Show my bookings"}
+        )
+        self.assertEqual(private_chat.status_code, 200, private_chat.text)
+        self.assertIn("Sign in", private_chat.json()["reply"])
+        discovery_chat = self.client.post(
+            "/api/v2/chat", json={"message": "Suggest music events"}
+        )
+        self.assertEqual(discovery_chat.status_code, 200, discovery_chat.text)
+        self.assertIn("not configured", discovery_chat.json()["reply"])
+        self.assertEqual(discovery_chat.json()["events"][0]["id"], self.event_id)
+        nearby_chat = self.client.post(
+            "/api/v2/chat", json={"message": "Find events near me"}
+        )
+        self.assertEqual(nearby_chat.status_code, 200, nearby_chat.text)
+        self.assertIn("Bengaluru", nearby_chat.json()["reply"])
+        self.assertEqual(nearby_chat.json()["events"], [])
+        location_chat = self.client.post(
+            "/api/v2/chat", json={"message": "Find events in Test venue"}
+        )
+        self.assertEqual(location_chat.status_code, 200, location_chat.text)
+        self.assertEqual(location_chat.json()["events"][0]["id"], self.event_id)
+
+    def test_phase_four_profile_picture_upload_validation(self):
+        user_headers = self.headers("USER")
+        with TemporaryDirectory() as directory, patch(
+            "app.endpoints.MEDIA_DIR", Path(directory)
+        ):
+            uploaded = self.client.post(
+                "/api/v2/profile/picture",
+                headers=user_headers,
+                files={
+                    "image": (
+                        "avatar.webp",
+                        b"RIFF\x00\x00\x00\x00WEBPimage-data",
+                        "image/webp",
+                    )
+                },
+            )
+            self.assertEqual(uploaded.status_code, 200, uploaded.text)
+            image_url = uploaded.json()["profile_picture_url"]
+            self.assertRegex(image_url, r"^/media/profiles/[a-f0-9]+\.webp$")
+            self.assertTrue(
+                (Path(directory) / "profiles" / Path(image_url).name).is_file()
+            )
+            invalid_type = self.client.post(
+                "/api/v2/profile/picture",
+                headers=user_headers,
+                files={"image": ("avatar.txt", b"not an image", "text/plain")},
+            )
+            self.assertEqual(invalid_type.status_code, 415)
+
+    def test_phase_four_reservations_are_atomic_and_released_on_failure(self):
+        user_headers = self.headers("USER")
+        booking = self.client.post(
+            "/api/bookings",
+            json={"event_id": self.event_id, "ticket_quantity": 5},
+            headers=user_headers,
+        )
+        self.assertEqual(booking.status_code, 201, booking.text)
+        availability = self.client.get(f"/api/events/{self.event_id}/availability")
+        self.assertEqual(availability.json()["available_tickets"], 0)
+        rejected = self.client.post(
+            "/api/bookings",
+            json={"event_id": self.event_id, "ticket_quantity": 1},
+            headers=user_headers,
+        )
+        self.assertEqual(rejected.status_code, 409)
+        failed_payment = self.client.post(
+            "/api/payments",
+            json={
+                "booking_id": booking.json()["id"],
+                "payment_method": "CARD",
+                "simulate_failure": True,
+            },
+            headers=user_headers,
+        )
+        self.assertEqual(failed_payment.status_code, 201, failed_payment.text)
+        availability = self.client.get(f"/api/events/{self.event_id}/availability")
+        self.assertEqual(availability.json()["available_tickets"], 5)
+
+    def test_phase_four_expired_reservations_are_released(self):
+        user_headers = self.headers("USER")
+        booking = self.client.post(
+            "/api/bookings",
+            json={"event_id": self.event_id, "ticket_quantity": 2},
+            headers=user_headers,
+        )
+        self.assertEqual(booking.status_code, 201, booking.text)
+        with Session(self.engine) as db:
+            pending_booking = db.get(Booking, booking.json()["id"])
+            pending_booking.created_at = datetime.now(timezone.utc) - timedelta(minutes=16)
+            db.commit()
+        availability = self.client.get(f"/api/events/{self.event_id}/availability")
+        self.assertEqual(availability.status_code, 200, availability.text)
+        self.assertEqual(availability.json()["available_tickets"], 5)
+        with Session(self.engine) as db:
+            self.assertEqual(db.get(Booking, booking.json()["id"]).booking_status, "EXPIRED")
+
+    def test_phase_four_event_announcements_and_price_filters(self):
+        organizer_headers = self.headers("ORGANIZER")
+        created = self.client.post(
+            f"/api/v2/events/{self.event_id}/updates",
+            json={"message": "Doors open at 6 PM", "important": True},
+            headers=organizer_headers,
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertTrue(created.json()["important"])
+        denied = self.client.post(
+            f"/api/v2/events/{self.event_id}/updates",
+            json={"message": "Unauthorized announcement"},
+            headers=self.headers("ORGANIZER_2"),
+        )
+        self.assertEqual(denied.status_code, 404)
+        updates = self.client.get(f"/api/v2/events/{self.event_id}/updates")
+        self.assertEqual(updates.status_code, 200, updates.text)
+        self.assertEqual(updates.json()[0]["message"], "Doors open at 6 PM")
+        self.assertTrue(updates.json()[0]["important"])
+        filtered = self.client.get("/api/events", params={"price_min": 26})
+        self.assertEqual(filtered.status_code, 200, filtered.text)
+        self.assertEqual(filtered.json(), [])
+        invalid_range = self.client.get(
+            "/api/events", params={"price_min": 30, "price_max": 20}
+        )
+        self.assertEqual(invalid_range.status_code, 422)
 
 
 if __name__ == "__main__":

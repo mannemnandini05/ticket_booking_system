@@ -30,6 +30,29 @@ class UserProfile(BaseModel):
     email: str
     role: Literal["USER", "ORGANIZER", "ADMIN"]
     created_at: datetime
+    profile_picture_url: str | None = None
+
+
+class UserProfileUpdate(BaseModel):
+    username: str = Field(min_length=3, max_length=80)
+    profile_picture_url: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        if not value.replace("_", "").replace("-", "").isalnum():
+            raise ValueError("Username may contain letters, numbers, underscores, and hyphens")
+        return value
+
+    @field_validator("profile_picture_url")
+    @classmethod
+    def validate_picture_url(cls, value: str | None) -> str | None:
+        if value is not None and not (
+            value.startswith(("https://", "http://"))
+            or value.startswith("/media/profiles/")
+        ):
+            raise ValueError("Profile picture must be an HTTP(S) URL or an uploaded profile image")
+        return value
 
 
 class UserAdminView(UserProfile):
@@ -274,6 +297,39 @@ class SearchFiltersRequest(BaseModel):
     price_max: float | None = Field(default=None, ge=0)
 
 
+class EventUpdateCreate(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    important: bool = False
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Message cannot be empty")
+        return value.strip()
+
+
+class EventUpdateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_id: int
+    message: str
+    important: bool
+    created_at: datetime
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Message cannot be empty")
+        return value.strip()
+
+
 class EventCardResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -287,6 +343,11 @@ class EventCardResponse(BaseModel):
     average_rating: float | None
     review_count: int
     lifecycle_status: str
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    events: list[EventCardResponse] = Field(default_factory=list)
 
 
 class FeaturedEventsResponse(BaseModel):

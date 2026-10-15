@@ -20,6 +20,7 @@ export default function Navbar() {
           {user && <>
             <NavLink to="/bookings" onClick={closeMenu}>My bookings</NavLink>
             <NavLink to="/tickets" onClick={closeMenu}>My tickets</NavLink>
+            <NavLink to="/wishlist" onClick={closeMenu}>Wishlist</NavLink>
             <NavLink to="/notifications" onClick={closeMenu}>Notifications</NavLink>
           </>}
           {user?.role === "ORGANIZER" && <NavLink to="/organizer" onClick={closeMenu}>Organizer</NavLink>}

@@ -13,6 +13,9 @@ SmartEvent is a full-stack event discovery and ticket booking application. Brows
 - Create and manage events as an organizer
 - Monitor organizer ticket sales, bookings, and revenue
 - Review platform analytics and manage user roles as an administrator
+- Track live ticket availability, save events, and receive personalized recommendations
+- View organizer announcements and manage profile details
+- Ask the event assistant for recommendations and booking guidance
 
 ## Tech stack
 
@@ -67,6 +70,8 @@ VITE_API_URL=http://127.0.0.1:8000/api
 
 Backend settings can be configured in `backend/.env`. The provided `backend/.env.example` contains the database URL and allowed frontend origin. Set a unique, strong `SECRET_KEY` before deploying outside local development.
 
+The optional chatbot uses an OpenAI-compatible chat-completions API. Configure `AI_API_BASE_URL` (for example, `https://api.openai.com/v1`), `AI_API_KEY`, and optionally `AI_MODEL` in `backend/.env`; never commit the key. Without provider configuration, local booking lookups and basic ticket-help guidance remain available, while AI-generated event discovery requests return a clear configuration error.
+
 ## Roles and initial administrator
 
 Every new registration receives the `USER` role; signup requests cannot assign elevated roles. An administrator can promote or demote accounts on the **Admin → Users** page. Promoted users must sign out and back in to receive a token with their new role.
@@ -104,6 +109,14 @@ Administrators can create promotional codes using `POST /api/admin/coupons`. Aut
 Event feedback is available from an event page after the event date for users with a confirmed booking. Attendees can create, edit, or delete their own review; `GET /api/events/{event_id}/reviews` returns reviews and the average rating. Event discovery accepts `search`, `category`, `location`, `date_from`, `date_to`, and `sort` (`date`, `popularity`, or `price`) query parameters.
 
 Notification reminders are generated when a user loads notifications if they have a confirmed booking for an event starting within the next 24 hours. Booking confirmations, payment outcomes, event changes, and cancellations create notification records. Notifications can be marked individually or all at once.
+
+## Phase 4: real-time and personalization
+
+Event availability is refreshed every five seconds on the event page, and announcements are refreshed every ten seconds. Booking reservations are claimed with a conditional atomic database update, included in availability, and released after payment failure or reservation expiry to prevent overselling. Signed-in browsing activity and confirmed bookings inform category/location recommendations. Wishlist and event announcement APIs are under `/api/v2`; profile edits, validated PNG/JPEG/WebP uploads (2 MB maximum), and a booking/activity summary are also available there. Event search supports `price_min` and `price_max` in addition to the existing filters.
+
+Organizers and administrators can mark event announcements as important; these appear with a distinct highlight and use a separate attendee notification title.
+
+The floating assistant handles booking lookups locally for authenticated users. Other event discovery prompts are sent to the configured AI provider with only the user's prompt and a limited list of public upcoming event details; credentials, account profile data, and booking records are not sent to the provider.
 
 ## Run tests
 

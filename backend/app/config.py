@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7
     frontend_origin: str = "http://localhost:5173"
+    ai_api_base_url: str = ""
+    ai_api_key: str = Field(default="", exclude=True)
+    ai_model: str = "gpt-4o-mini"
+    ai_timeout_seconds: int = Field(default=20, ge=1, le=60)
     jwt_token: str = Field(default="", exclude=True)
 
     @model_validator(mode="after")

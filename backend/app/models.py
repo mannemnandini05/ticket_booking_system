@@ -16,11 +16,14 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="USER", server_default="USER")
+    profile_picture_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     bookings: Mapped[list["Booking"]] = relationship(back_populates="user")
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user")
     organized_events: Mapped[list["Event"]] = relationship(back_populates="organizer")
     reviews: Mapped[list["Review"]] = relationship(back_populates="user")
+    event_views: Mapped[list["EventView"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    wishlist_items: Mapped[list["Wishlist"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class Event(Base):
@@ -35,11 +38,15 @@ class Event(Base):
     event_status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE", server_default="ACTIVE")
     ticket_price: Mapped[float] = mapped_column(Float, nullable=False)
     ticket_capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    reserved_tickets: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     banner_image: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     bookings: Mapped[list["Booking"]] = relationship(back_populates="event")
     organizer: Mapped[Optional[User]] = relationship(back_populates="organized_events")
     reviews: Mapped[list["Review"]] = relationship(back_populates="event")
+    event_views: Mapped[list["EventView"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    wishlist_items: Mapped[list["Wishlist"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    updates: Mapped[list["EventUpdate"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
     @property
     def average_rating(self) -> Optional[float]:
@@ -147,3 +154,36 @@ class Review(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     user: Mapped[User] = relationship(back_populates="reviews")
     event: Mapped[Event] = relationship(back_populates="reviews")
+
+
+class EventView(Base):
+    __tablename__ = "event_views"
+    __table_args__ = (UniqueConstraint("user_id", "event_id", name="uq_event_views_user_event"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    viewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    user: Mapped[User] = relationship(back_populates="event_views")
+    event: Mapped[Event] = relationship(back_populates="event_views")
+
+
+class Wishlist(Base):
+    __tablename__ = "wishlist"
+    __table_args__ = (UniqueConstraint("user_id", "event_id", name="uq_wishlist_user_event"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    user: Mapped[User] = relationship(back_populates="wishlist_items")
+    event: Mapped[Event] = relationship(back_populates="wishlist_items")
+
+
+class EventUpdate(Base):
+    __tablename__ = "event_updates"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    important: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    event: Mapped[Event] = relationship(back_populates="updates")

@@ -6,6 +6,7 @@ import BookingHistory from "./pages/bookingHistory";
 import BookingConfirmationPage from "./pages/bookingConfirmation";
 import EventDetails from "./pages/eventDetails";
 import Home from "./pages/home";
+import Wishlist from "./pages/wishlist";
 import Login from "./pages/login";
 import Notifications from "./pages/notifications";
 import PaymentCheckout from "./pages/paymentCheckout";
@@ -24,6 +25,8 @@ import {
   OrganizerEvents,
 } from "./pages/management";
 import "./feature-pages.css";
+import "./phase4.css";
+import ChatAssistant from "./components/ChatAssistant";
 
 function AppRoutes() {
   const { user, authError } = useAuth();
@@ -47,6 +50,7 @@ function AppRoutes() {
         <Route path="/tickets/:id" element={<ProtectedRoute><Tickets /></ProtectedRoute>} />
         <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+        <Route path="/wishlist" element={<ProtectedRoute><Wishlist /></ProtectedRoute>} />
         <Route path="/organizer" element={<RoleRoute roles={["ORGANIZER"]}><OrganizerDashboard /></RoleRoute>} />
         <Route path="/organizer/events" element={<RoleRoute roles={["ORGANIZER"]}><OrganizerEvents /></RoleRoute>} />
         <Route path="/organizer/events/new" element={<RoleRoute roles={["ORGANIZER"]}><OrganizerEventForm /></RoleRoute>} />
@@ -60,6 +64,7 @@ function AppRoutes() {
       </Routes>
       {location.pathname !== "/login" && location.pathname !== "/register" && <div className="mobile-top" />}
       <footer><span className="brand"><span className="brand-mark">S</span> SmartEvent</span><p>Discover. Book. Experience.</p><small>© 2026 SmartEvent</small></footer>
+      <ChatAssistant />
     </div>
   );
 }

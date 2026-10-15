@@ -149,10 +149,11 @@ def update_event(
             raise HTTPException(status_code=422, detail="Event date must be in the future")
         changes["event_date"] = event_date
     sold, _, _ = booking_summary(db, event.id)
-    if changes.get("ticket_capacity", event.ticket_capacity) < sold:
+    occupied = max(sold, event.reserved_tickets)
+    if changes.get("ticket_capacity", event.ticket_capacity) < occupied:
         raise HTTPException(
             status_code=409,
-            detail="Ticket capacity cannot be lower than tickets already sold",
+            detail="Ticket capacity cannot be lower than sold tickets or active reservations",
         )
     changed_fields = [
         field

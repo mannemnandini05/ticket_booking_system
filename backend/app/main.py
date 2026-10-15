@@ -5,15 +5,16 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
 
 import qrcode
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select, update
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import engine, get_db, migrate_schema
-from .endpoints import router as advanced_router
+from .endpoints import MEDIA_DIR, router as advanced_router
 from .management import (
     admin_router,
     booking_summary,
@@ -49,6 +50,7 @@ from .security import create_access_token, get_current_user, hash_password, requ
 
 settings = get_settings()
 app = FastAPI(title="SmartEvent API", version="1.0.0")
+app.mount("/media", StaticFiles(directory=str(MEDIA_DIR), check_dir=False), name="media")
 app.include_router(event_management_router)
 app.include_router(organizer_router)
 app.include_router(admin_router)
@@ -77,12 +79,62 @@ def seed_data(db: Session) -> None:
     db.commit()
 
 
+def reconcile_reserved_tickets(db: Session) -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    events = db.scalars(select(Event)).all()
+    for event in events:
+        reserved = db.scalar(
+            select(func.coalesce(func.sum(Booking.ticket_quantity), 0)).where(
+                Booking.event_id == event.id,
+                (Booking.booking_status == "CONFIRMED")
+                | (
+                    (Booking.booking_status == "PENDING_PAYMENT")
+                    & (Booking.created_at >= cutoff)
+                ),
+            )
+        ) or 0
+        event.reserved_tickets = int(reserved)
+    db.commit()
+
+
+def release_expired_reservations(event_id: int, db: Session) -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+    expired_quantity = sum(
+        db.scalars(
+            update(Booking)
+            .where(
+                Booking.event_id == event_id,
+                Booking.booking_status == "PENDING_PAYMENT",
+                Booking.created_at < cutoff,
+            )
+            .values(booking_status="EXPIRED")
+            .execution_options(synchronize_session=False)
+            .returning(Booking.ticket_quantity)
+        ).all()
+    )
+    if not expired_quantity:
+        return
+    db.execute(
+        update(Event)
+        .where(Event.id == event_id)
+        .values(
+            reserved_tickets=case(
+                (Event.reserved_tickets >= expired_quantity, Event.reserved_tickets - expired_quantity),
+                else_=0,
+            )
+        )
+    )
+    db.commit()
+
+
 @app.on_event("startup")
 def startup() -> None:
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     migrate_schema()
     Base.metadata.create_all(bind=engine)
     with Session(engine) as db:
         seed_data(db)
+        reconcile_reserved_tickets(db)
         sync_completed_events(db)
 
 
@@ -127,10 +179,14 @@ def list_events(
     date_from: date | None = None,
     date_to: date | None = None,
     sort: str = "date",
+    price_min: float | None = Query(default=None, ge=0),
+    price_max: float | None = Query(default=None, ge=0),
 ) -> list[Event]:
     sync_completed_events(db)
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=422, detail="date_from must not be after date_to")
+    if price_min is not None and price_max is not None and price_min > price_max:
+        raise HTTPException(status_code=422, detail="price_min must not exceed price_max")
     popularity = (
         select(func.coalesce(func.sum(Booking.ticket_quantity), 0))
         .where(Booking.event_id == Event.id, Booking.booking_status == "CONFIRMED")
@@ -148,6 +204,10 @@ def list_events(
         query = query.where(Event.event_date >= datetime.combine(date_from, datetime.min.time(), tzinfo=timezone.utc))
     if date_to:
         query = query.where(Event.event_date < datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc))
+    if price_min is not None:
+        query = query.where(Event.ticket_price >= price_min)
+    if price_max is not None:
+        query = query.where(Event.ticket_price <= price_max)
     if sort == "date":
         query = query.order_by(Event.event_date)
     elif sort == "price":
@@ -176,18 +236,12 @@ def event_availability(event_id: int, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=404, detail="Event not found")
     if event.event_status != "ACTIVE":
         raise HTTPException(status_code=409, detail="This event is no longer available for booking")
-    reservation_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
-    reserved = db.scalar(
-        select(func.coalesce(func.sum(Booking.ticket_quantity), 0)).where(
-            Booking.event_id == event_id,
-            (Booking.booking_status == "CONFIRMED")
-            | (
-                (Booking.booking_status == "PENDING_PAYMENT")
-                & (Booking.created_at >= reservation_cutoff)
-            ),
-        )
-    ) or 0
-    return {"available_tickets": max(event.ticket_capacity - reserved, 0), "total_tickets": event.ticket_capacity}
+    release_expired_reservations(event_id, db)
+    db.refresh(event)
+    return {
+        "available_tickets": max(event.ticket_capacity - event.reserved_tickets, 0),
+        "total_tickets": event.ticket_capacity,
+    }
 
 
 @app.get("/api/events/{event_id}/reviews", response_model=EventReviewsResponse)
@@ -384,18 +438,18 @@ def create_booking(payload: BookingCreate, current_user: Annotated[User, Depends
     event_date = event.event_date.replace(tzinfo=timezone.utc) if event.event_date.tzinfo is None else event.event_date
     if event_date <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="This event has already started")
-    reservation_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
-    reserved = db.scalar(
-        select(func.coalesce(func.sum(Booking.ticket_quantity), 0)).where(
-            Booking.event_id == event.id,
-            (Booking.booking_status == "CONFIRMED")
-            | (
-                (Booking.booking_status == "PENDING_PAYMENT")
-                & (Booking.created_at >= reservation_cutoff)
-            ),
+    release_expired_reservations(event.id, db)
+    reservation = db.execute(
+        update(Event)
+        .where(
+            Event.id == event.id,
+            Event.event_status == "ACTIVE",
+            Event.reserved_tickets + payload.ticket_quantity <= Event.ticket_capacity,
         )
-    ) or 0
-    if reserved + payload.ticket_quantity > event.ticket_capacity:
+        .values(reserved_tickets=Event.reserved_tickets + payload.ticket_quantity)
+    )
+    if reservation.rowcount != 1:
+        db.rollback()
         raise HTTPException(status_code=409, detail="Not enough tickets are available")
     total_price = round(event.ticket_price * payload.ticket_quantity, 2)
     booking = Booking(
@@ -499,28 +553,24 @@ def create_payment(
         event_date = event_date.replace(tzinfo=timezone.utc)
     if booking.event.event_status != "ACTIVE" or event_date <= datetime.now(timezone.utc):
         raise HTTPException(status_code=409, detail="This event is no longer accepting payment")
-    created_at = booking.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
-    if created_at < datetime.now(timezone.utc) - timedelta(minutes=15):
-        booking.booking_status = "EXPIRED"
-        db.commit()
+    release_expired_reservations(booking.event_id, db)
+    db.refresh(booking)
+    if booking.booking_status == "EXPIRED":
         raise HTTPException(status_code=409, detail="This booking reservation has expired; please book again")
     if booking.booking_status == "PAYMENT_FAILED":
-        reservation_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
-        other_reservations = db.scalar(
-            select(func.coalesce(func.sum(Booking.ticket_quantity), 0)).where(
-                Booking.event_id == booking.event_id,
-                Booking.id != booking.id,
-                (Booking.booking_status == "CONFIRMED")
-                | (
-                    (Booking.booking_status == "PENDING_PAYMENT")
-                    & (Booking.created_at >= reservation_cutoff)
-                ),
+        reservation = db.execute(
+            update(Event)
+            .where(
+                Event.id == booking.event_id,
+                Event.event_status == "ACTIVE",
+                Event.reserved_tickets + booking.ticket_quantity <= Event.ticket_capacity,
             )
-        ) or 0
-        if other_reservations + booking.ticket_quantity > booking.event.ticket_capacity:
+            .values(reserved_tickets=Event.reserved_tickets + booking.ticket_quantity)
+        )
+        if reservation.rowcount != 1:
+            db.rollback()
             raise HTTPException(status_code=409, detail="Not enough tickets remain to retry this booking")
+        booking.booking_status = "PENDING_PAYMENT"
     if payload.simulate_failure and settings.environment.lower() == "production":
         raise HTTPException(status_code=403, detail="Payment failure simulation is disabled in production")
 
@@ -535,6 +585,16 @@ def create_payment(
         payment.payment_status = "FAILED"
         payment.transaction_id = f"SIM-DECLINED-{uuid.uuid4().hex.upper()}"
         booking.booking_status = "PAYMENT_FAILED"
+        db.execute(
+            update(Event)
+            .where(Event.id == booking.event_id)
+            .values(
+                reserved_tickets=case(
+                    (Event.reserved_tickets >= booking.ticket_quantity, Event.reserved_tickets - booking.ticket_quantity),
+                    else_=0,
+                )
+            )
+        )
         db.add(
             Notification(
                 user_id=current_user.id,

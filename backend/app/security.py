@@ -13,6 +13,7 @@ from .models import User
 
 settings = get_settings()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -36,6 +37,25 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired authentication token") from exc
     user = db.get(User, user_id)
     if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
+    if payload.get("role") not in (None, user.role):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your role has changed; sign in again")
+    return user
+
+
+def get_optional_current_user(
+    db: Session = Depends(get_db),
+    token: str | None = Depends(optional_oauth2_scheme),
+) -> User | None:
+    if token is None:
+        return None
+    try:
+        payload: dict[str, Any] = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        user_id = int(payload["sub"])
+    except (jwt.InvalidTokenError, KeyError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired authentication token") from exc
+    user = db.get(User, user_id)
+    if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer exists")
     if payload.get("role") not in (None, user.role):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Your role has changed; sign in again")

@@ -13,6 +13,12 @@ export default function EventDetails() {
   const [reviewText, setReviewText] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [availability, setAvailability] = useState(0);
+  const [availabilityError, setAvailabilityError] = useState("");
+  const [updates, setUpdates] = useState([]);
+  const [updateDraft, setUpdateDraft] = useState("");
+  const [importantDraft, setImportantDraft] = useState(false);
+  const [updateError, setUpdateError] = useState("");
+  const [postingUpdate, setPostingUpdate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -42,13 +48,62 @@ export default function EventDetails() {
     api.get(`/events/${id}/reviews`)
       .then((response) => active && setReviews(response.data))
       .catch((reason) => active && setReviewError(reason.message));
+    api.get(`/v2/events/${id}/updates`)
+      .then((response) => active && setUpdates(response.data))
+      .catch((reason) => active && setUpdateError(reason.message));
     if (user) {
+      api.post(`/v2/events/${id}/views`).catch((reason) => active && setError(reason.message));
       api.get("/bookings")
         .then((response) => active && setHasAttended(response.data.some((booking) => booking.event_id === Number(id) && booking.booking_status === "CONFIRMED")))
         .catch((reason) => active && setReviewError(reason.message));
     }
     return () => { active = false; };
   }, [id, user]);
+
+  useEffect(() => {
+    let active = true;
+    const refreshUpdates = () => {
+      api.get(`/v2/events/${id}/updates`)
+        .then((response) => {
+          if (!active) return;
+          setUpdates(response.data);
+          setUpdateError("");
+        })
+        .catch((reason) => active && setUpdateError(reason.message));
+    };
+    const intervalId = window.setInterval(refreshUpdates, 10000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [id]);
+
+  useEffect(() => {
+    if (!event || event.event_status !== "ACTIVE" || event.lifecycle_status !== "UPCOMING") {
+      setAvailability(0);
+      return undefined;
+    }
+    let active = true;
+    const refreshAvailability = () => {
+      api.get(`/events/${id}/availability`)
+        .then((response) => {
+          if (!active) return;
+          setAvailabilityError("");
+          setAvailability(response.data.available_tickets);
+        })
+        .catch((reason) => {
+          if (!active) return;
+          setAvailability(0);
+          setAvailabilityError(reason.message);
+        });
+    };
+    refreshAvailability();
+    const intervalId = window.setInterval(refreshAvailability, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [id, event?.event_status, event?.lifecycle_status]);
 
   const submit = async () => {
     setSubmitting(true);
@@ -94,6 +149,23 @@ export default function EventDetails() {
     }
   };
 
+  const postUpdate = async (submitEvent) => {
+    submitEvent.preventDefault();
+    setPostingUpdate(true);
+    setUpdateError("");
+    try {
+      await api.post(`/v2/events/${id}/updates`, { message: updateDraft, important: importantDraft });
+      const response = await api.get(`/v2/events/${id}/updates`);
+      setUpdates(response.data);
+      setUpdateDraft("");
+      setImportantDraft(false);
+    } catch (reason) {
+      setUpdateError(reason.message);
+    } finally {
+      setPostingUpdate(false);
+    }
+  };
+
   useEffect(() => {
     if (ownReview) {
       setRating(ownReview.rating);
@@ -121,6 +193,8 @@ export default function EventDetails() {
               <button aria-label="Add one ticket" disabled={quantity >= availability || submitting} onClick={() => setQuantity((value) => Math.min(availability, value + 1))}>+</button>
             </div>}
             <div className="availability"><span className="status-dot" /> {availability} tickets available</div>
+            <small className="live-indicator">Live availability · refreshes every 5 seconds</small>
+            {availabilityError && <p className="field-error" role="alert">{availabilityError}</p>}
             {user && <div className="price-row"><span>Total</span><strong>₹{(event.ticket_price * quantity).toLocaleString("en-IN")}</strong></div>}
             {error && <div className="error-state">{error}</div>}
             <button className="primary-button wide" onClick={() => user ? submit() : navigate("/login")} disabled={!availability || event.event_status !== "ACTIVE" || event.lifecycle_status !== "UPCOMING" || submitting}>{user ? (submitting ? "Creating booking..." : "Continue to checkout") : "Sign in to book"}</button>
@@ -128,6 +202,21 @@ export default function EventDetails() {
         </div>
         <div className="booking-image"><img src={event.banner_image} alt={event.title} /><div><span>{event.category}</span><h2>{event.title}</h2><p>{event.location}</p></div></div>
       </div>
+      <section className="event-live-updates">
+        <div className="reviews-heading"><div><span className="eyebrow">Announcements</span><h2>Live updates</h2></div><span className="live-indicator">Latest first</span></div>
+        {updateError && <div className="error-state" role="alert">{updateError}</div>}
+        {(user?.role === "ADMIN" || (user?.role === "ORGANIZER" && user.id === event.organizer_id)) && <form className="event-update-form" onSubmit={postUpdate}>
+          <label htmlFor="event-update-message">Post an announcement</label>
+          <textarea id="event-update-message" value={updateDraft} onChange={(input) => setUpdateDraft(input.target.value)} maxLength={2000} required rows={3} />
+          <label className="important-update-toggle"><input type="checkbox" checked={importantDraft} onChange={(input) => setImportantDraft(input.target.checked)} /> Mark as important</label>
+          <button className="primary-button small" disabled={postingUpdate}>{postingUpdate ? "Posting..." : "Post update"}</button>
+        </form>}
+        <div className="event-update-list">
+          {updates.length ? updates.map((item) => <article className={`event-update-card${item.important ? " important" : ""}`} key={item.id}>
+            <strong>{item.important ? "Important announcement" : "Event announcement"}</strong><p>{item.message}</p><small>{new Date(item.created_at).toLocaleString("en-IN")}</small>
+          </article>) : <p className="empty-copy">No announcements have been posted for this event.</p>}
+        </div>
+      </section>
       <section className="event-reviews">
         <div className="reviews-heading"><div><span className="eyebrow">Attendee feedback</span><h2>Reviews {reviews.average_rating !== null && <span>★ {reviews.average_rating}</span>}</h2></div><small>{reviews.review_count} review{reviews.review_count === 1 ? "" : "s"}</small></div>
         {reviewError && <div className="error-state">{reviewError}</div>}
